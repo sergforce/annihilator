@@ -2,6 +2,9 @@
 #define _ANN_ABI_H_
 #include <stdint.h>
 #include <stddef.h>
+#ifdef __linux
+#include <semaphore.h>
+#endif
 
 #ifdef __cplusplus
 extern "C" {
@@ -13,6 +16,7 @@ extern "C" {
  */
 
 
+#define ANN_MAX_STAGE_NAME    20
 #define ANN_MAX_NAME    16
 #define ANN_MAX_STAGES  16
 
@@ -20,6 +24,8 @@ extern "C" {
 
 
 #define STAGE_SIZE      ANN_BLOCK_ALIGN * 2
+
+typedef char ann_stage_finalizer_t;
 
 enum ann_stage_lock_types {
     ANN_STL_SPIN,     /**< Spin locker */
@@ -35,13 +41,18 @@ enum ann_stage_types {
     ANN_STC_MIN_MOUT
 };
 
-struct ann_stage_info {
+struct ann_stage_def {
     uint8_t in_routes;
     uint8_t self_routes;
     uint8_t stage_lock_type;   /**< see @ref ann_stage_lock_types */
     uint8_t stage_concurrency; /**< see @ref ann_stage_types */
+};
 
+struct ann_stage_info {
+    struct ann_stage_def def;
+    uint32_t stage_off;
     uint32_t stage_size;
+    char     stage_name[ANN_MAX_STAGE_NAME];
 };
 
 struct ann_header {
@@ -73,6 +84,26 @@ struct ann_stage_counters64 {
     char _dummy[64 - 8];
     int64_t progress_no;
 };
+
+#ifdef __linux
+
+struct ann_stage_counters_sem32 {
+    int32_t ready_no;
+    char _dummy[64 - 4];
+    int32_t progress_no;
+    char _dummy2[64 - 4];
+    sem_t sem;
+};
+
+struct ann_stage_counters_sem64 {
+    int64_t ready_no;
+    char _dummy[64 - 8];
+    int64_t progress_no;
+    char _dummy2[64 - 8];
+    sem_t sem;
+};
+
+#endif
 
 
 #ifdef __cplusplus

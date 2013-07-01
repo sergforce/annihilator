@@ -3,6 +3,7 @@
 #include <string.h>
 #include <assert.h>
 #include <malloc.h>
+#include <errno.h>
 
 #define PAUSE() \
      asm volatile ("pause\r\n" : : : "memory");
@@ -10,7 +11,50 @@
 #define NOP() \
      asm volatile ("nop\r\n" : : : "memory");
 
-struct annihilator* ann_create(uint32_t cells, uint8_t stages, uint32_t msg_size)
+#define ALIGN_TO(x, val)                   if ((x) % (val)) (x) += ((val) - ((x) % (val)))
+
+static uint32_t ann_calculate_stage_size(uint32_t cells, const struct ann_stage_def *stinfo)
+{
+    uint32_t basic;
+    uint32_t finsz;
+
+    switch (stinfo->stage_lock_type) {
+    case ANN_STL_SPIN:      basic = sizeof(struct ann_stage_counters64); break;
+    case ANN_STL_POSIX_SEM: basic = sizeof(struct ann_stage_counters_sem64); break;
+    default:                basic = 0;
+    }
+
+    switch (stinfo->stage_concurrency) {
+    case ANN_STC_MIN_MOUT:  finsz = cells * sizeof(ann_stage_finalizer_t);
+    default:                finsz = 0;
+    }
+
+    ALIGN_TO(basic, ANN_BLOCK_ALIGN);
+    ALIGN_TO(finsz, ANN_BLOCK_ALIGN);
+
+    return basic + finsz;
+}
+
+static void ann_init_stage(void* mem, const struct ann_stage_def *stinfo, uint32_t readys)
+{
+    switch (stinfo->stage_lock_type) {
+    case ANN_STL_SPIN: {
+        struct ann_stage_counters64* pcnt = (struct ann_stage_counters64*)mem;
+        pcnt->ready_no = readys;
+        pcnt->progress_no = 0;
+        break;
+    }
+    case ANN_STL_POSIX_SEM: {
+        struct ann_stage_counters_sem64* pcnt = (struct ann_stage_counters_sem64*)mem;
+        pcnt->ready_no = readys;
+        pcnt->progress_no = 0;
+        sem_init(&pcnt->sem, 0, readys);
+        break;
+    }
+    }
+}
+
+struct annihilator* ann_create(uint32_t cells, uint8_t stages, uint32_t msg_size, struct ann_stage_def *stinfo)
 {
     size_t buff_off;
     size_t stages_off;
@@ -18,18 +62,23 @@ struct annihilator* ann_create(uint32_t cells, uint8_t stages, uint32_t msg_size
     struct annihilator* a;
     struct ann_header * h;
     int i;
+    uint32_t stoffs[ANN_MAX_STAGES];
+    uint32_t stsz[ANN_MAX_STAGES];
 
     buff_off = sizeof(struct ann_header);
-    if (buff_off % ANN_BLOCK_ALIGN) {
-        buff_off += ANN_BLOCK_ALIGN - (buff_off % ANN_BLOCK_ALIGN);
-    }
+    ALIGN_TO(buff_off, ANN_BLOCK_ALIGN);
 
     stages_off = buff_off + cells * msg_size;
-    if (stages_off % ANN_BLOCK_ALIGN) {
-        stages_off += ANN_BLOCK_ALIGN - (stages_off % ANN_BLOCK_ALIGN);
+    ALIGN_TO(stages_off, ANN_BLOCK_ALIGN);
+
+    end_off = stages_off; // + stages * STAGE_SIZE;
+    for (i = 0; i < stages; i++) {
+        stsz[i] = ann_calculate_stage_size(cells, &stinfo[i]);
+        stoffs[i] = end_off;
+
+        end_off += stsz[i];
     }
 
-    end_off = stages_off + stages * STAGE_SIZE;
     a = (struct annihilator*)memalign(ANN_BLOCK_ALIGN, end_off + ANN_BLOCK_ALIGN);
     if (a == NULL) {
         return NULL;
@@ -51,11 +100,17 @@ struct annihilator* ann_create(uint32_t cells, uint8_t stages, uint32_t msg_size
     a->cells = cells;
 
     for (i = 0; i < stages; i++) {
-        a->stages[i] = (char*)h + stages_off + i * STAGE_SIZE;
+        h->stages_inf[i].stage_off  = stoffs[i];
+        h->stages_inf[i].stage_size = stsz[i];
+        h->stages_inf[i].def = stinfo[i];
+
+        a->stages[i] = (char*)h + stoffs[i];//stages_off + i * STAGE_SIZE;
+
+        ann_init_stage(a->stages[i], &stinfo[i], (i == 0) ? cells : 0);
     }
 
-    memset(a->stages[0], 0, stages * ANN_BLOCK_ALIGN);
-    (( struct ann_stage_counters32*)a->stages[0])->ready_no = cells;
+    //memset(a->stages[0], 0, stages * ANN_BLOCK_ALIGN);
+    //(( struct ann_stage_counters32*)a->stages[0])->ready_no = cells;
 
     return a;
 }
@@ -92,6 +147,44 @@ void     ann_next32(struct annihilator* ann, uint8_t stage, uint32_t no)
         ++c->ready_no;
     }
 }
+
+
+uint32_t ann_wait_sem32(struct annihilator* ann, uint8_t stage)
+{
+    struct ann_stage_counters_sem32* c = ( struct ann_stage_counters_sem32*)ann->stages[stage];
+
+    int res;
+    for (;;) {
+        res = sem_trywait(&c->sem);
+        if (res == -1) {
+            if (errno == EAGAIN) {
+                PAUSE();
+                continue;
+            }
+        } else {
+            break;
+        }
+    }
+    return c->progress_no++;
+}
+
+void     ann_next_sem32(struct annihilator* ann, uint8_t stage, uint32_t no)
+{
+    if (stage + 1 == ann->stages_num) {
+        struct ann_stage_counters_sem32* c = ( struct ann_stage_counters_sem32*)ann->stages[0];
+        //Release
+        //check endNo
+        uint32_t old = c->ready_no++;
+        sem_post(&c->sem);
+        assert (old - no == ann->cells);
+        (void)old;
+    } else {
+        struct ann_stage_counters_sem32* c = ( struct ann_stage_counters_sem32*)ann->stages[stage + 1];
+        sem_post(&c->sem);
+        ++c->ready_no;
+    }
+}
+
 
 void*    ann_get32(struct annihilator* ann, uint32_t no)
 {
@@ -175,3 +268,10 @@ void*    ann_get16(struct annihilator* ann, uint16_t no)
 {
     return ann->data_buffer + (no & ann->mask16) * ann->msg_size;
 }
+
+
+
+
+
+
+

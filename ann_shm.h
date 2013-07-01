@@ -8,6 +8,7 @@ extern "C" {
 #endif
 
 
+
 struct annihilator
 {
     struct ann_header *pshm;
@@ -27,11 +28,14 @@ struct annihilator
 
 
 
-struct annihilator* ann_create(uint32_t cells, uint8_t stages, uint32_t msg_size);
+struct annihilator* ann_create(uint32_t cells, uint8_t stages, uint32_t msg_size, struct ann_stage_def* stinfo);
 void     ann_destroy(struct annihilator* ann);
 
 uint32_t ann_wait32(struct annihilator* ann, uint8_t stage);
+uint32_t ann_wait_sem32(struct annihilator* ann, uint8_t stage);
+
 void     ann_next32(struct annihilator* ann, uint8_t stage, uint32_t no);
+void     ann_next_sem32(struct annihilator* ann, uint8_t stage, uint32_t no);
 
 void*    ann_get32(struct annihilator* ann, uint32_t no);
 
@@ -46,6 +50,7 @@ uint16_t ann_wait16(struct annihilator* ann, uint8_t stage);
 void     ann_next16(struct annihilator* ann, uint8_t stage, uint16_t no);
 
 void*    ann_get16(struct annihilator* ann, uint16_t no);
+
 
 
 
