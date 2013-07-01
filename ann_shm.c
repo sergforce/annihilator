@@ -46,7 +46,9 @@ static void ann_init_stage(void* mem, const struct ann_stage_def *stinfo, uint32
     }
     case ANN_STL_POSIX_SEM: {
         struct ann_stage_counters_sem64* pcnt = (struct ann_stage_counters_sem64*)mem;
+#ifdef SEM_DEBUG
         pcnt->ready_no = readys;
+#endif
         pcnt->progress_no = 0;
         sem_init(&pcnt->sem, 0, readys);
         break;
@@ -174,15 +176,40 @@ void     ann_next_sem32(struct annihilator* ann, uint8_t stage, uint32_t no)
         struct ann_stage_counters_sem32* c = ( struct ann_stage_counters_sem32*)ann->stages[0];
         //Release
         //check endNo
+#ifdef SEM_DEBUG
         uint32_t old = c->ready_no++;
-        sem_post(&c->sem);
         assert (old - no == ann->cells);
         (void)old;
+#endif
+        sem_post(&c->sem);
+
     } else {
         struct ann_stage_counters_sem32* c = ( struct ann_stage_counters_sem32*)ann->stages[stage + 1];
         sem_post(&c->sem);
+#ifdef SEM_DEBUG
         ++c->ready_no;
+#endif
     }
+}
+
+
+uint32_t ann_wait_sem_m32(struct annihilator* ann, uint8_t stage)
+{
+    struct ann_stage_counters_sem32* c = ( struct ann_stage_counters_sem32*)ann->stages[stage];
+
+    int res;
+    for (;;) {
+        res = sem_trywait(&c->sem);
+        if (res == -1) {
+            if (errno == EAGAIN) {
+                PAUSE();
+                continue;
+            }
+        } else {
+            break;
+        }
+    }
+    return __sync_fetch_and_add(&c->progress_no, 1);
 }
 
 

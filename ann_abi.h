@@ -88,16 +88,20 @@ struct ann_stage_counters64 {
 #ifdef __linux
 
 struct ann_stage_counters_sem32 {
+#ifdef SEM_DEBUG
     int32_t ready_no;
     char _dummy[64 - 4];
+#endif
     int32_t progress_no;
     char _dummy2[64 - 4];
     sem_t sem;
 };
 
 struct ann_stage_counters_sem64 {
+#ifdef SEM_DEBUG
     int64_t ready_no;
     char _dummy[64 - 8];
+#endif
     int64_t progress_no;
     char _dummy2[64 - 8];
     sem_t sem;

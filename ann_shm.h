@@ -37,6 +37,9 @@ uint32_t ann_wait_sem32(struct annihilator* ann, uint8_t stage);
 void     ann_next32(struct annihilator* ann, uint8_t stage, uint32_t no);
 void     ann_next_sem32(struct annihilator* ann, uint8_t stage, uint32_t no);
 
+
+uint32_t ann_wait_sem_m32(struct annihilator* ann, uint8_t stage);
+
 void*    ann_get32(struct annihilator* ann, uint32_t no);
 
 

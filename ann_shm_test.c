@@ -26,13 +26,21 @@ typedef uint32_t ann_no_t;
 #define ann_next ann_next32
 #define VER "32bit"
 #define LOCK_TYPE  ANN_STL_SPIN
-#else
+#elif defined(USE_SEM32)
 typedef uint32_t ann_no_t;
 #define ann_wait ann_wait_sem32
 #define ann_get  ann_get32
 #define ann_next ann_next_sem32
 #define VER "32bit(sem)"
 #define LOCK_TYPE  ANN_STL_POSIX_SEM
+#else
+typedef uint32_t ann_no_t;
+#define ann_wait ann_wait_sem_m32
+#define ann_get  ann_get32
+#define ann_next ann_next_sem32
+#define VER "32bit(sem m_wait)"
+#define LOCK_TYPE  ANN_STL_POSIX_SEM
+
 #endif
 
 struct annihilator *pa;
