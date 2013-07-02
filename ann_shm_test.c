@@ -1,9 +1,14 @@
+#define _GNU_SOURCE             /* See feature_test_macros(7) */
+#include <pthread.h>
+
 #include "ann_shm.h"
 #include <pthread.h>
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
+#include <string.h>
+#include <semaphore.h>
 
 #ifdef USE64
 typedef uint64_t ann_no_t;
@@ -57,12 +62,47 @@ typedef uint32_t ann_no_t;
 #error Unknown configuration to run
 #endif
 
-struct annihilator *pa;
-volatile int started;
+int cpu_bench = 0;
+uint32_t cells = 256;
+uint32_t msg_size = 8;
+uint32_t count = 1000000;
+
+struct annihilator *pa = NULL;
+volatile int started = 0;
+sem_t sync_sem;
+
+struct stat_data {
+    int64_t ns;
+};
+
+struct stat_data *adj_matrix;
+int numCPU;
+int vec_i;
+int vec_j;
+
+void set_task(int j)
+{
+    cpu_set_t cpuset;
+
+    CPU_ZERO(&cpuset);
+    CPU_SET(j, &cpuset);
+
+    int s = pthread_setaffinity_np(pthread_self(), sizeof(cpu_set_t), &cpuset);
+    if (s != 0) {
+        perror("pthread_getaffinity_np");
+        exit(2);
+    }
+}
+
 void *wait_thread(void* arg)
 {
     ann_no_t no;
     void* a;
+
+    if (cpu_bench) {
+        set_task(vec_i);
+    }
+
     started = 1;
 
     for (;;) {
@@ -75,48 +115,20 @@ void *wait_thread(void* arg)
     }
 }
 
-int main(int argc, char** argv)
+void *prod_thread(void* arg)
 {
-    uint32_t cells = 256;
-    uint32_t msg_size = 8;
-    uint32_t count = 1000000;
     uint32_t i;
-    int opt;
     void* a;
     ann_no_t no;
-
-    while ((opt = getopt(argc, argv, "c:m:n:h")) != -1) {
-        switch (opt) {
-        case 'c':
-            cells = atoi(optarg);
-            break;
-        case 'm':
-            msg_size = atoi(optarg);
-            break;
-        case 'n':
-            count = atoi(optarg);
-            break;
-        default: /* '?' */
-            fprintf(stderr, "Usage: %s [-c calls] [-m msg_size]\n",
-                    argv[0]);
-            exit(EXIT_FAILURE);
-        }
-    }
-
-    struct ann_stage_def nfo[2] = {
-        { 1, 1, LOCK_TYPE, CONCUR },
-        { 1, 1, LOCK_TYPE, CONCUR }
-    };
-
-    pa = ann_create(cells, 2, msg_size, nfo);
-    if (pa == NULL) {
-        exit(2);
-    }
-
     pthread_t th;
+
     int res = pthread_create(&th, NULL, wait_thread, NULL);
     if (res) {
         exit(3);
+    }
+
+    if (cpu_bench) {
+        set_task(vec_j);
     }
 
     while (!started);
@@ -137,8 +149,113 @@ int main(int argc, char** argv)
 
     int64_t ns = (ts2.tv_sec -ts1.tv_sec) * 1000000000 +  (ts2.tv_nsec -ts1.tv_nsec);
 
-    printf("TEST(%s): C=%d M=%d N=%d took %12ld\n", VER,  cells, msg_size, count, ns);
-    printf("AVG : %.3f M/s\n", (((double)count * 1000)) / ns);
+    if (cpu_bench) {
+        adj_matrix[vec_i * numCPU + vec_j].ns = ns;
+        sem_post(&sync_sem);
+    } else {
+        printf("TEST(%s): C=%d M=%d N=%d took %12ld\n", VER,  cells, msg_size, count, ns);
+        printf("AVG : %.3f M/s\n", (((double)count * 1000)) / ns);
+    }
+
+    return NULL;
+}
+
+
+int main(int argc, char** argv)
+{
+    int opt;
+    while ((opt = getopt(argc, argv, "bc:m:n:h")) != -1) {
+        switch (opt) {
+        case 'c':
+            cells = atoi(optarg);
+            break;
+        case 'm':
+            msg_size = atoi(optarg);
+            break;
+        case 'n':
+            count = atoi(optarg);
+            break;
+        case 'b':
+            cpu_bench = 1;
+            break;
+        default: /* '?' */
+            fprintf(stderr, "Usage: %s [-c calls] [-m msg_size]\n",
+                    argv[0]);
+            exit(EXIT_FAILURE);
+        }
+    }
+
+    struct ann_stage_def nfo[2] = {
+        { 1, 1, LOCK_TYPE, CONCUR },
+        { 1, 1, LOCK_TYPE, CONCUR }
+    };
+
+    if (cpu_bench) {
+        sem_init (&sync_sem, 0, 0);
+
+        numCPU = sysconf( _SC_NPROCESSORS_ONLN );
+        printf("Total CPUs: %d\n", numCPU);
+
+        adj_matrix = malloc(sizeof(struct stat_data) * numCPU * numCPU );
+        memset(adj_matrix, 0, sizeof(struct stat_data) * numCPU * numCPU);
+
+        for (vec_i = 0; vec_i < numCPU; vec_i++) {
+            for (vec_j = 0; vec_j < numCPU; vec_j++) {
+                pthread_t th;
+
+                if (vec_i == vec_j)
+                    continue;
+
+                pa = ann_create(cells, 2, msg_size, nfo);
+                if (pa == NULL) {
+                    exit(2);
+                }
+
+                int res = pthread_create(&th, NULL, prod_thread, NULL);
+                if (res) {
+                    exit(3);
+                }
+
+                sem_wait(&sync_sem);
+
+                ann_destroy(pa);
+
+                printf("."); fflush(stdout);
+            }
+        }
+
+        printf("\n\n");
+
+        int i, j;
+        for (i = 0; i < numCPU; i++) {
+            if (i == 0) {
+                printf("    ");
+                for (j = 0; j < numCPU; j++) {
+                    printf(" %7d", j);
+                }
+                printf("\n");
+            }
+
+            printf(" %2d: ", i);
+            for (j = 0; j < numCPU; j++) {
+                uint64_t ns = adj_matrix[i * numCPU + j].ns;
+                printf(" %7.3f",  (((double)count * 1000)) / ns);
+            }
+            printf("\n");
+        }
+
+        return 0;
+
+    } else {
+        pa = ann_create(cells, 2, msg_size, nfo);
+        if (pa == NULL) {
+            exit(2);
+        }
+
+        prod_thread(NULL);
+
+        ann_destroy(pa);
+    }
 
     return 0;
 }
