@@ -37,7 +37,7 @@ typedef uint32_t ann_no_t;
 #define VER "32bit(sem)"
 #define LOCK_TYPE  ANN_STL_POSIX_SEM
 #define CONCUR     ANN_STC_SIN_SOUT
-#else
+#elif defined(USE_SEM_M32)
 typedef uint32_t ann_no_t;
 #define ann_wait ann_wait_sem_m32
 #define ann_get  ann_get32
@@ -45,7 +45,16 @@ typedef uint32_t ann_no_t;
 #define VER "32bit(sem mthread)"
 #define LOCK_TYPE  ANN_STL_POSIX_SEM
 #define CONCUR     ANN_STC_MIN_MOUT
-
+#elif defined(USE_M32)
+typedef uint32_t ann_no_t;
+#define ann_wait ann_wait_m32
+#define ann_get  ann_get32
+#define ann_next ann_next_m32
+#define VER "32bit(mthread)"
+#define LOCK_TYPE  ANN_STL_SPIN
+#define CONCUR     ANN_STC_MIN_MOUT
+#else
+#error Unknown configuration to run
 #endif
 
 struct annihilator *pa;

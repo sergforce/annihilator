@@ -25,7 +25,7 @@ extern "C" {
 
 #define STAGE_SIZE      ANN_BLOCK_ALIGN * 2
 
-typedef char ann_stage_finalizer_t;
+typedef uint8_t ann_stage_finalizer_t;
 
 enum ann_stage_lock_types {
     ANN_STL_SPIN,     /**< Spin locker */
@@ -68,61 +68,79 @@ struct ann_header {
 };
 
 struct ann_stage_counters16 {
-    int16_t ready_no;
-    char _dummy[64 - 2];
     int16_t progress_no;
+    char _dummy[64 - 2];
+    int16_t ready_no;
 };
 
 struct ann_stage_counters32 {
-    int32_t ready_no;
-    char _dummy[64 - 4];
     int32_t progress_no;
+    char _dummy[64 - 4];
+    int32_t ready_no;
 };
 
 struct ann_stage_counters64 {
+    int64_t progress_no;
+    char _dummy[64 - 8];
+    int64_t ready_no;
+};
+
+struct ann_stage_counters_m32 {
+    int32_t progress_no;
+    char _dummy2[64 - 4];
+    int32_t ready_no;
+    char _dummy[64 - 4];
+    int32_t cnt_fre;
+    char _dummy3[64 - 4];
+};
+
+struct ann_stage_counters_m64 {
+    int64_t progress_no;
+    char _dummy2[64 - 8];
     int64_t ready_no;
     char _dummy[64 - 8];
-    int64_t progress_no;
+    int64_t cnt_fre;
+    char _dummy3[64 - 8];
 };
 
 #ifdef __linux
 
 struct ann_stage_counters_sem32 {
+    int32_t progress_no;
+    char _dummy2[64 - 4];
 #ifdef SEM_DEBUG
     int32_t ready_no;
     char _dummy[64 - 4];
 #endif
-    int32_t progress_no;
-    char _dummy2[64 - 4];
     sem_t sem;
 };
 
 struct ann_stage_counters_sem64 {
+    int64_t progress_no;
+    char _dummy2[64 - 8];
 #ifdef SEM_DEBUG
     int64_t ready_no;
     char _dummy[64 - 8];
 #endif
-    int64_t progress_no;
-    char _dummy2[64 - 8];
     sem_t sem;
 };
 
 
 struct ann_stage_counters_sem_m32 {
-    int32_t ready_no;
-    char _dummy[64 - 4];
     int32_t progress_no;
     char _dummy2[64 - 4];
+    int32_t ready_no;
+    char _dummy[64 - 4];
     sem_t sem;
     int32_t cnt_fre;
     char _dummy3[64 - 4];
 };
 
 struct ann_stage_counters_sem_m64 {
-    int64_t ready_no;
-    char _dummy[64 - 8];
     int64_t progress_no;
     char _dummy2[64 - 8];
+    int64_t ready_no;
+    char _dummy[64 - 8];
     sem_t sem;
     int32_t cnt_fre;
     char _dummy3[64 - 4];
