@@ -151,6 +151,7 @@ void *prod_thread(void* arg)
 
     if (cpu_bench) {
         adj_matrix[vec_i * numCPU + vec_j].ns = ns;
+        pthread_join(th, NULL);
         sem_post(&sync_sem);
     } else {
         printf("TEST(%s): C=%d M=%d N=%d took %12ld\n", VER,  cells, msg_size, count, ns);
