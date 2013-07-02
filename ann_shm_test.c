@@ -12,6 +12,7 @@ typedef uint64_t ann_no_t;
 #define ann_next ann_next64
 #define VER        "64bit"
 #define LOCK_TYPE  ANN_STL_SPIN
+#define CONCUR     ANN_STC_SIN_SOUT
 #elif defined(USE16)
 typedef uint16_t ann_no_t;
 #define ann_wait ann_wait16
@@ -19,6 +20,7 @@ typedef uint16_t ann_no_t;
 #define ann_next ann_next16
 #define VER "16bit"
 #define LOCK_TYPE  ANN_STL_SPIN
+#define CONCUR     ANN_STC_SIN_SOUT
 #elif defined(USE32)
 typedef uint32_t ann_no_t;
 #define ann_wait ann_wait32
@@ -26,6 +28,7 @@ typedef uint32_t ann_no_t;
 #define ann_next ann_next32
 #define VER "32bit"
 #define LOCK_TYPE  ANN_STL_SPIN
+#define CONCUR     ANN_STC_SIN_SOUT
 #elif defined(USE_SEM32)
 typedef uint32_t ann_no_t;
 #define ann_wait ann_wait_sem32
@@ -33,13 +36,15 @@ typedef uint32_t ann_no_t;
 #define ann_next ann_next_sem32
 #define VER "32bit(sem)"
 #define LOCK_TYPE  ANN_STL_POSIX_SEM
+#define CONCUR     ANN_STC_SIN_SOUT
 #else
 typedef uint32_t ann_no_t;
 #define ann_wait ann_wait_sem_m32
 #define ann_get  ann_get32
-#define ann_next ann_next_sem32
-#define VER "32bit(sem m_wait)"
+#define ann_next ann_next_sem_m32
+#define VER "32bit(sem mthread)"
 #define LOCK_TYPE  ANN_STL_POSIX_SEM
+#define CONCUR     ANN_STC_MIN_MOUT
 
 #endif
 
@@ -90,8 +95,8 @@ int main(int argc, char** argv)
     }
 
     struct ann_stage_def nfo[2] = {
-        { 1, 1, LOCK_TYPE, 1 },
-        { 1, 1, LOCK_TYPE, 1 }
+        { 1, 1, LOCK_TYPE, CONCUR },
+        { 1, 1, LOCK_TYPE, CONCUR }
     };
 
     pa = ann_create(cells, 2, msg_size, nfo);

@@ -20,13 +20,24 @@ static uint32_t ann_calculate_stage_size(uint32_t cells, const struct ann_stage_
 
     switch (stinfo->stage_lock_type) {
     case ANN_STL_SPIN:      basic = sizeof(struct ann_stage_counters64); break;
-    case ANN_STL_POSIX_SEM: basic = sizeof(struct ann_stage_counters_sem64); break;
+    case ANN_STL_POSIX_SEM: {
+        switch (stinfo->stage_concurrency) {
+        case ANN_STC_MIN_MOUT:
+            basic = sizeof(struct ann_stage_counters_sem_m64);
+            break;
+
+        default:
+            basic = sizeof(struct ann_stage_counters_sem64);
+            break;
+        }
+        break;
+    }
     default:                basic = 0;
     }
 
     switch (stinfo->stage_concurrency) {
-    case ANN_STC_MIN_MOUT:  finsz = cells * sizeof(ann_stage_finalizer_t);
-    default:                finsz = 0;
+    case ANN_STC_MIN_MOUT:  finsz = cells * sizeof(ann_stage_finalizer_t); break;
+    default:                finsz = 0;  break;
     }
 
     ALIGN_TO(basic, ANN_BLOCK_ALIGN);
@@ -35,8 +46,11 @@ static uint32_t ann_calculate_stage_size(uint32_t cells, const struct ann_stage_
     return basic + finsz;
 }
 
-static void ann_init_stage(void* mem, const struct ann_stage_def *stinfo, uint32_t readys)
+static void ann_init_stage(void* mem, const struct ann_stage_info *st, uint32_t readys)
 {
+    const struct ann_stage_def *stinfo = &st->def;
+    memset(mem, 0, st->stage_size);
+
     switch (stinfo->stage_lock_type) {
     case ANN_STL_SPIN: {
         struct ann_stage_counters64* pcnt = (struct ann_stage_counters64*)mem;
@@ -45,12 +59,25 @@ static void ann_init_stage(void* mem, const struct ann_stage_def *stinfo, uint32
         break;
     }
     case ANN_STL_POSIX_SEM: {
-        struct ann_stage_counters_sem64* pcnt = (struct ann_stage_counters_sem64*)mem;
+        switch (stinfo->stage_concurrency) {
+        case ANN_STC_MIN_MOUT: {
+            struct ann_stage_counters_sem_m64* pcnt = (struct ann_stage_counters_sem_m64*)mem;
+            pcnt->ready_no = readys;
+            pcnt->progress_no = 0;
+            sem_init(&pcnt->sem, 0, readys);
+            pcnt->cnt_fre = 0;
+            break;
+        }
+        default: {
+            struct ann_stage_counters_sem64* pcnt = (struct ann_stage_counters_sem64*)mem;
 #ifdef SEM_DEBUG
-        pcnt->ready_no = readys;
+            pcnt->ready_no = readys;
 #endif
-        pcnt->progress_no = 0;
-        sem_init(&pcnt->sem, 0, readys);
+            pcnt->progress_no = 0;
+            sem_init(&pcnt->sem, 0, readys);
+            break;
+        }
+        }
         break;
     }
     }
@@ -108,7 +135,7 @@ struct annihilator* ann_create(uint32_t cells, uint8_t stages, uint32_t msg_size
 
         a->stages[i] = (char*)h + stoffs[i];//stages_off + i * STAGE_SIZE;
 
-        ann_init_stage(a->stages[i], &stinfo[i], (i == 0) ? cells : 0);
+        ann_init_stage(a->stages[i], &h->stages_inf[i], (i == 0) ? cells : 0);
     }
 
     //memset(a->stages[0], 0, stages * ANN_BLOCK_ALIGN);
@@ -195,7 +222,7 @@ void     ann_next_sem32(struct annihilator* ann, uint8_t stage, uint32_t no)
 
 uint32_t ann_wait_sem_m32(struct annihilator* ann, uint8_t stage)
 {
-    struct ann_stage_counters_sem32* c = ( struct ann_stage_counters_sem32*)ann->stages[stage];
+    struct ann_stage_counters_sem_m32* c = ( struct ann_stage_counters_sem_m32*)ann->stages[stage];
 
     int res;
     for (;;) {
@@ -212,6 +239,62 @@ uint32_t ann_wait_sem_m32(struct annihilator* ann, uint8_t stage)
     return __sync_fetch_and_add(&c->progress_no, 1);
 }
 
+void     ann_next_sem_m32(struct annihilator* ann, uint8_t stage, uint32_t no)
+{
+    struct ann_stage_counters_sem_m32* c = (stage + 1 == ann->stages_num) ?
+        ( struct ann_stage_counters_sem_m32*)ann->stages[0] :
+        ( struct ann_stage_counters_sem_m32*)ann->stages[stage + 1];
+
+    struct ann_stage_counters_sem_m32* z = ( struct ann_stage_counters_sem_m32*)ann->stages[stage];
+
+    ann_stage_finalizer_t *f = (ann_stage_finalizer_t*)((char*)(c) + sizeof(struct ann_stage_counters_sem_m32));
+    uint32_t wakecnt = 0;
+    uint32_t last_r;
+
+    f[(no & ann->mask32)] = 1;
+    int lcnt = __sync_add_and_fetch(&c->cnt_fre, 1);
+    if (lcnt > 1)
+        return;
+
+    for (;;) {
+        uint32_t sno;
+        if (stage + 1 == ann->stages_num)
+            sno = c->ready_no - ann->cells;
+        else
+            sno = c->ready_no;
+
+        uint32_t wcnt = 0;
+
+        for (; sno < z->progress_no; sno++) {
+            if (f[(sno & ann->mask32)] == 0)
+                break;
+
+            wcnt++;
+        }
+
+        if (wcnt) {
+            wakecnt += wcnt;
+            last_r = (c->ready_no += wcnt);
+        }
+
+        if (__sync_bool_compare_and_swap(&c->cnt_fre, lcnt, 0)) {
+            break;
+        }
+
+        lcnt = c->cnt_fre;
+    }
+
+    if (wakecnt != 0) {
+        int j = wakecnt;
+        for (; j > 0 ; --j) {
+            f[((last_r - j) & ann->mask32)] = 0;
+        }
+    }
+    for (;wakecnt != 0; wakecnt--) {
+        sem_post(&c->sem);
+    }
+
+}
 
 void*    ann_get32(struct annihilator* ann, uint32_t no)
 {

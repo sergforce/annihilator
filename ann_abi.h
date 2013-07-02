@@ -107,6 +107,27 @@ struct ann_stage_counters_sem64 {
     sem_t sem;
 };
 
+
+struct ann_stage_counters_sem_m32 {
+    int32_t ready_no;
+    char _dummy[64 - 4];
+    int32_t progress_no;
+    char _dummy2[64 - 4];
+    sem_t sem;
+    int32_t cnt_fre;
+    char _dummy3[64 - 4];
+};
+
+struct ann_stage_counters_sem_m64 {
+    int64_t ready_no;
+    char _dummy[64 - 8];
+    int64_t progress_no;
+    char _dummy2[64 - 8];
+    sem_t sem;
+    int32_t cnt_fre;
+    char _dummy3[64 - 4];
+};
+
 #endif
 
 
