@@ -62,7 +62,10 @@ typedef uint32_t ann_no_t;
 #error Unknown configuration to run
 #endif
 
+int verbose_output = 0;
 int cpu_bench = 0;
+int group_thres = 100; // 10.0%
+
 uint32_t cells = 256;
 uint32_t msg_size = 8;
 uint32_t count = 1000000;
@@ -161,12 +164,25 @@ void *prod_thread(void* arg)
     return NULL;
 }
 
+static int uint64_t_cmp(const void *pa, const void *pb)
+{
+    uint64_t a, b;
+    a = *(uint64_t*)pa;
+    b = *(uint64_t*)pb;
+    return a < b;
+}
 
 int main(int argc, char** argv)
 {
     int opt;
-    while ((opt = getopt(argc, argv, "bc:m:n:h")) != -1) {
+    while ((opt = getopt(argc, argv, "t:vbc:m:n:h")) != -1) {
         switch (opt) {
+        case 'v':
+            verbose_output = 1;
+            break;
+        case 't':
+            group_thres = atoi(optarg);
+            break;
         case 'c':
             cells = atoi(optarg);
             break;
@@ -244,6 +260,52 @@ int main(int argc, char** argv)
             }
             printf("\n");
         }
+
+        uint64_t *pns = malloc(sizeof(uint64_t) * numCPU * (numCPU - 1) / 2);
+        uint8_t *grps = malloc(numCPU * (numCPU - 1) / 2);
+        int k = 0;
+        for (i = 0; i < numCPU; i++) {
+            for (j = i + 1; j <numCPU; j++) {
+                uint64_t ans, bns;
+                ans = (uint64_t)count * 1000000  / adj_matrix[i * numCPU + j].ns;
+                bns = (uint64_t)count * 1000000  / adj_matrix[j * numCPU + i].ns;
+
+                pns[k++] = (ans > bns) ? ans : bns;
+            }
+        }
+
+        qsort(pns, numCPU * (numCPU - 1) / 2, sizeof(uint64_t), uint64_t_cmp);
+        if (verbose_output) {
+            printf("Sorted: \n");
+            for (k = 0; k < numCPU * (numCPU - 1) / 2; k++) {
+                printf(" %7d", (int)pns[k]);
+            }
+            printf("\n");
+        }
+
+        i = 0; //Prev group start
+        j = 0; //Current group index
+        for (k = 0; k < numCPU * (numCPU - 1) / 2; k++) {
+            uint64_t v = (pns[i] - pns[k]) * 1000 / pns[i];
+            if (v < 0) v = -v;
+
+            if (v > group_thres) {
+                grps[j++] = k;
+                i = k;
+            }
+        }
+        grps[j++] = k - 1;
+
+        int latency_groups = j;
+        printf("\nLatency groups: %d\n", latency_groups);
+        for (i = 0; i < latency_groups; i++) {
+            int st = ( i == 0 ) ? 0 : grps[i-1];
+            int en = grps[i] - 1;
+            if (en < st) en = st;
+
+            printf(" L%02d: %7d -- %7d\n", i, (int)pns[st],  (int)pns[en]);
+        }
+
 
         return 0;
 
