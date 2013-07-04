@@ -56,7 +56,7 @@ static uint32_t ann_calculate_stage_size(uint32_t cells, const struct ann_stage_
     return basic + finsz;
 }
 
-static void ann_init_stage(void* mem, const struct ann_stage_info *st, uint32_t readys)
+static void ann_init_stage(void* mem, const struct ann_stage_info *st, uint32_t readys, int shmuse)
 {
     const struct ann_stage_def *stinfo = &st->def;
     memset(mem, 0, st->stage_size);
@@ -74,7 +74,7 @@ static void ann_init_stage(void* mem, const struct ann_stage_info *st, uint32_t 
             struct ann_stage_counters_sem_m64* pcnt = (struct ann_stage_counters_sem_m64*)mem;
             pcnt->ready_no = readys;
             pcnt->progress_no = 0;
-            sem_init(&pcnt->sem, 0, readys);
+            sem_init(&pcnt->sem, shmuse, readys);
             pcnt->cnt_fre = 0;
             break;
         }
@@ -84,7 +84,7 @@ static void ann_init_stage(void* mem, const struct ann_stage_info *st, uint32_t 
             pcnt->ready_no = readys;
 #endif
             pcnt->progress_no = 0;
-            sem_init(&pcnt->sem, 0, readys);
+            sem_init(&pcnt->sem, shmuse, readys);
             break;
         }
         }
@@ -93,12 +93,31 @@ static void ann_init_stage(void* mem, const struct ann_stage_info *st, uint32_t 
     }
 }
 
-struct annihilator* ann_create(uint32_t cells, uint8_t stages, uint32_t msg_size, struct ann_stage_def *stinfo)
+size_t ann_shm_calc_size(uint32_t cells, uint8_t stages, uint32_t msg_size, const struct ann_stage_def *stinfo)
 {
     size_t buff_off;
     size_t stages_off;
     size_t end_off;
-    struct annihilator* a;
+    int i;
+
+    buff_off = sizeof(struct ann_header);
+    ALIGN_TO(buff_off, ANN_BLOCK_ALIGN);
+
+    stages_off = buff_off + cells * msg_size;
+    ALIGN_TO(stages_off, ANN_BLOCK_ALIGN);
+
+    end_off = stages_off; // + stages * STAGE_SIZE;
+    for (i = 0; i < stages; i++) {
+        end_off += ann_calculate_stage_size(cells, &stinfo[i]);
+    }
+    return   end_off;
+}
+
+int ann_shm_create(void* mem, uint32_t cells, uint8_t stages, uint32_t msg_size, const struct ann_stage_def *stinfo, int shmuse, struct annihilator* a)
+{
+    size_t buff_off;
+    size_t stages_off;
+    size_t end_off;
     struct ann_header * h;
     int i;
     uint32_t stoffs[ANN_MAX_STAGES];
@@ -118,17 +137,14 @@ struct annihilator* ann_create(uint32_t cells, uint8_t stages, uint32_t msg_size
         end_off += stsz[i];
     }
 
-    a = (struct annihilator*)memalign(ANN_BLOCK_ALIGN, end_off + ANN_BLOCK_ALIGN);
-    if (a == NULL) {
-        return NULL;
-    }
-
-    h = (struct ann_header *)((char*)a + ANN_BLOCK_ALIGN);
+    h = (struct ann_header *)(mem);
 
     h->total_mem_size = end_off;
     h->total_cells_count = cells;
     h->total_stages_count = stages;
     h->total_buffer_size = stages_off - buff_off;
+    h->fixed_msg_size = msg_size;
+    h->attach_count = 0;
 
     a->pshm = h;
     a->data_buffer = (char*)h + buff_off;
@@ -145,13 +161,61 @@ struct annihilator* ann_create(uint32_t cells, uint8_t stages, uint32_t msg_size
 
         a->stages[i] = (char*)h + stoffs[i];//stages_off + i * STAGE_SIZE;
 
-        ann_init_stage(a->stages[i], &h->stages_inf[i], (i == 0) ? cells : 0);
+        ann_init_stage(a->stages[i], &h->stages_inf[i], (i == 0) ? cells : 0, shmuse);
     }
 
-    //memset(a->stages[0], 0, stages * ANN_BLOCK_ALIGN);
-    //(( struct ann_stage_counters32*)a->stages[0])->ready_no = cells;
+    return AE_OK;
+}
 
+struct annihilator* ann_create(uint32_t cells, uint8_t stages, uint32_t msg_size, const struct ann_stage_def *stinfo)
+{
+    size_t sz = ann_shm_calc_size(cells, stages, msg_size, stinfo);
+    struct annihilator* a = (struct annihilator*)memalign(ANN_BLOCK_ALIGN, sz + ANN_BLOCK_ALIGN);
+    if (a == NULL) {
+        return NULL;
+    }
+
+    ann_shm_create((char*)a + ANN_BLOCK_ALIGN, cells, stages, msg_size, stinfo, 0, a);
     return a;
+}
+
+int ann_shm_open(void* shm, size_t available_sz, struct annihilator* a)
+{
+    size_t buff_off;
+    //size_t stages_off;
+    //size_t end_off;
+    struct ann_header * h;
+    int i;
+
+    h = (struct ann_header *)(shm);
+    if (h->total_mem_size < available_sz) {
+        return AE_INVALID_SIZE;
+    }
+    memset(a, 0, sizeof(*a));
+
+    uint8_t stages     = h->total_stages_count;
+    uint32_t cells     = h->total_cells_count;
+
+    buff_off = sizeof(struct ann_header);
+    ALIGN_TO(buff_off, ANN_BLOCK_ALIGN);
+
+    //stages_off = buff_off + h->total_buffer_size;
+    //end_off = stages_off;
+
+    a->pshm = h;
+    a->data_buffer = (char*)h + buff_off;
+
+    a->mask64 = cells - 1;
+    a->msg_size = h->fixed_msg_size;
+    a->stages_num = stages;
+    a->cells = cells;
+
+    for (i = 0; i < stages; i++) {
+        a->stages[i] =  (char*)h +  h->stages_inf[i].stage_off;
+    }
+
+    __sync_fetch_and_add(&h->attach_count, 1);
+    return AE_OK;
 }
 
 void     ann_destroy(struct annihilator* ann)

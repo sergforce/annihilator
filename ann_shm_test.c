@@ -10,6 +10,10 @@
 #include <string.h>
 #include <semaphore.h>
 
+#include <sys/mman.h>
+#include <sys/stat.h>        /* For mode constants */
+#include <fcntl.h>           /* For O_* constants */
+
 #ifdef USE64
 typedef uint64_t ann_no_t;
 #define ann_wait ann_wait64
@@ -83,6 +87,13 @@ int numCPU;
 int vec_i;
 int vec_j;
 
+const static struct ann_stage_def nfo[2] = {
+    { 1, 1, LOCK_TYPE, CONCUR },
+    { 1, 1, LOCK_TYPE, CONCUR }
+};
+
+static char shared_mem_name[512] = "/ann-shared";
+
 void set_task(int j)
 {
     cpu_set_t cpuset;
@@ -97,7 +108,7 @@ void set_task(int j)
     }
 }
 
-void *wait_thread(void* arg)
+static void *wait_thread(void* arg)
 {
     ann_no_t no;
     void* a;
@@ -118,11 +129,33 @@ void *wait_thread(void* arg)
     }
 }
 
-void *prod_thread(void* arg)
+static int64_t prod_work()
 {
     uint32_t i;
     void* a;
     ann_no_t no;
+    struct timespec ts1, ts2;
+    int res = clock_gettime(CLOCK_REALTIME, &ts1);
+
+    for (i = 0; i < count; i++) {
+        no = ann_wait(pa, 0);
+        a = ann_get(pa, no);
+        (*(char*)a) = 0;
+         ann_next(pa, 0, no);
+    }
+    no = ann_wait(pa, 0);
+    a = ann_get(pa, no);
+    (*(char*)a) = 1;
+     ann_next(pa, 0, no);
+    res = clock_gettime(CLOCK_REALTIME, &ts2);
+    (void)res;
+
+    int64_t ns = (ts2.tv_sec -ts1.tv_sec) * 1000000000 +  (ts2.tv_nsec -ts1.tv_nsec);
+    return ns;
+}
+
+static void *prod_thread(void* arg)
+{
     pthread_t th;
 
     int res = pthread_create(&th, NULL, wait_thread, NULL);
@@ -136,21 +169,7 @@ void *prod_thread(void* arg)
 
     while (!started);
 
-    struct timespec ts1, ts2;
-    res = clock_gettime(CLOCK_REALTIME, &ts1);
-    for (i = 0; i < count; i++) {
-        no = ann_wait(pa, 0);
-        a = ann_get(pa, no);
-        (*(char*)a) = 0;
-         ann_next(pa, 0, no);
-    }
-    no = ann_wait(pa, 0);
-    a = ann_get(pa, no);
-    (*(char*)a) = 1;
-     ann_next(pa, 0, no);
-    res = clock_gettime(CLOCK_REALTIME, &ts2);
-
-    int64_t ns = (ts2.tv_sec -ts1.tv_sec) * 1000000000 +  (ts2.tv_nsec -ts1.tv_nsec);
+    int64_t ns = prod_work();
 
     if (cpu_bench) {
         adj_matrix[vec_i * numCPU + vec_j].ns = ns;
@@ -172,11 +191,72 @@ static int uint64_t_cmp(const void *pa, const void *pb)
     return a < b;
 }
 
+static void open_shm(const char* name)
+{
+    static struct annihilator an;
+
+    int fd = shm_open(name, O_RDWR, 0666);
+    size_t len = 0;
+    struct stat st;
+    fstat(fd, &st);
+    len = st.st_size;
+
+    if (fd == -1 || len == 0) {
+        exit (5);
+    }
+
+    void *m = mmap(NULL, len, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    int res = ann_shm_open(m, len, &an);
+    if (res) {
+        exit (6);
+    }
+
+    if (verbose_output) {
+        printf("Opened ann: Cells=%d msg_size=%d stages=%d\n",
+               (int)an.cells, (int)an.msg_size, (int)an.stages_num);
+    }
+
+    pa = &an;
+
+    cells = an.cells;
+    msg_size = an.stages_num;
+}
+
+
+static void create_shm(const char* name)
+{
+    static struct annihilator an;
+
+    int fd = shm_open(name, O_RDWR | O_TRUNC | O_CREAT, 0666);
+    size_t sz = ann_shm_calc_size(cells, 2, msg_size, nfo);
+    int res = ftruncate(fd, sz);
+    if (res) {
+        perror("ftruncate");
+        exit(9);
+    }
+
+    void *m = mmap(NULL, sz, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    res = ann_shm_create(m, cells, 2, msg_size, nfo, 1, &an);
+    if (res) {
+        exit (6);
+    }
+
+    pa = &an;
+}
+
+
 int main(int argc, char** argv)
 {
+    int producer = 0, consumer = 0;
     int opt;
-    while ((opt = getopt(argc, argv, "t:vbc:m:n:h")) != -1) {
+    while ((opt = getopt(argc, argv, "PRt:vbc:m:n:h")) != -1) {
         switch (opt) {
+        case 'P':
+            producer = 1;
+            break;
+        case 'R':
+            consumer = 1;
+            break;
         case 'v':
             verbose_output = 1;
             break;
@@ -202,10 +282,30 @@ int main(int argc, char** argv)
         }
     }
 
-    struct ann_stage_def nfo[2] = {
-        { 1, 1, LOCK_TYPE, CONCUR },
-        { 1, 1, LOCK_TYPE, CONCUR }
-    };
+    if (producer || consumer) {
+        if (verbose_output) {
+            printf("Running in shared memory mode: %s\n", shared_mem_name);
+        }
+
+        if (producer) {
+            create_shm(shared_mem_name);
+            while (((struct ann_header *)pa->pshm)->attach_count == 0) {
+                usleep(500);
+            }
+            int64_t ns = prod_work();
+
+            printf("TEST(%s): C=%d M=%d N=%d took %12ld\n", VER,  cells, msg_size, count, ns);
+            printf("AVG : %.3f M/s\n", (((double)count * 1000)) / ns);
+
+        } else {
+            open_shm(shared_mem_name);
+
+            wait_thread(NULL);
+        }
+
+        exit(0);
+    }
+
 
     if (cpu_bench) {
         sem_init (&sync_sem, 0, 0);

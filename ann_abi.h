@@ -25,6 +25,12 @@ extern "C" {
 
 #define STAGE_SIZE      ANN_BLOCK_ALIGN * 2
 
+enum ann_err {
+    AE_OK,
+    AE_INVALID_SIZE,
+
+};
+
 typedef uint8_t ann_stage_finalizer_t;
 
 enum ann_stage_lock_types {
@@ -57,11 +63,13 @@ struct ann_stage_info {
 
 struct ann_header {
     char      name[ANN_MAX_NAME]; /**< Name of this Annihilator */
-    uint64_t  total_mem_size;     /**< Overall memory size in SHM */
+    uint64_t  total_mem_size;     /**< Overall memory size available for the annihilator */
     uint32_t  total_cells_count;  /**< Total cells count, must be power of 2 */
     uint32_t  total_stages_count;
     uint64_t  total_buffer_size;  /**< Overall size for data buffer */
 
+    uint32_t  fixed_msg_size;
+    uint32_t  attach_count;       /**< ann_shm_open calls */
     struct ann_stage_info stages_inf[ANN_MAX_STAGES];
 
 
