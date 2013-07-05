@@ -70,6 +70,8 @@ int verbose_output = 0;
 int cpu_bench = 0;
 int group_thres = 100; // 10.0%
 
+int consumers = 1;
+
 uint32_t cells = 256;
 uint32_t msg_size = 8;
 uint32_t count = 1000000;
@@ -108,6 +110,8 @@ void set_task(int j)
     }
 }
 
+static __thread int g_cnt;
+
 static void *wait_thread(void* arg)
 {
     ann_no_t no;
@@ -125,6 +129,10 @@ static void *wait_thread(void* arg)
         if (*(char*)a == 1) {
             return 0;
         }
+
+        g_cnt++;
+
+
         ann_next(pa, 1, no);
     }
 }
@@ -141,6 +149,9 @@ static int64_t prod_work()
         no = ann_wait(pa, 0);
         a = ann_get(pa, no);
         (*(char*)a) = 0;
+
+        g_cnt++;
+
          ann_next(pa, 0, no);
     }
     no = ann_wait(pa, 0);
@@ -157,10 +168,14 @@ static int64_t prod_work()
 static void *prod_thread(void* arg)
 {
     pthread_t th;
+    int k;
+    int res;
 
-    int res = pthread_create(&th, NULL, wait_thread, NULL);
-    if (res) {
-        exit(3);
+    for (k = 0; k < consumers; k++) {
+        res = pthread_create(&th, NULL, wait_thread, NULL);
+        if (res) {
+            exit(3);
+        }
     }
 
     if (cpu_bench) {
@@ -249,7 +264,7 @@ int main(int argc, char** argv)
 {
     int producer = 0, consumer = 0;
     int opt;
-    while ((opt = getopt(argc, argv, "PRt:vbc:m:n:h")) != -1) {
+    while ((opt = getopt(argc, argv, "PRt:vbc:m:n:hC:")) != -1) {
         switch (opt) {
         case 'P':
             producer = 1;
@@ -274,6 +289,9 @@ int main(int argc, char** argv)
             break;
         case 'b':
             cpu_bench = 1;
+            break;
+        case 'C':
+            consumers = atoi(optarg);
             break;
         default: /* '?' */
             fprintf(stderr, "Usage: %s [-c calls] [-m msg_size]\n",

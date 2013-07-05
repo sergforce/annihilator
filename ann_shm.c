@@ -325,7 +325,7 @@ void     ann_next_sem_m32(struct annihilator* ann, uint8_t stage, uint32_t no)
     uint32_t wakecnt = 0;
     uint32_t last_r;
 
-    f[(no & ann->mask32)] = 1;
+    GET_STAGE_FIN(f[(no & ann->mask32)]) = 1;
     int lcnt = __sync_add_and_fetch(&c->cnt_fre, 1);
     if (lcnt > 1)
         return;
@@ -340,7 +340,7 @@ void     ann_next_sem_m32(struct annihilator* ann, uint8_t stage, uint32_t no)
         uint32_t wcnt = 0;
 
         for (; sno < z->progress_no; sno++) {
-            if (f[(sno & ann->mask32)] == 0)
+            if (GET_STAGE_FIN(f[(sno & ann->mask32)]) == 0)
                 break;
 
             wcnt++;
@@ -361,7 +361,7 @@ void     ann_next_sem_m32(struct annihilator* ann, uint8_t stage, uint32_t no)
     if (wakecnt != 0) {
         int j = wakecnt;
         for (; j > 0 ; --j) {
-            f[((last_r - j) & ann->mask32)] = 0;
+            GET_STAGE_FIN(f[((last_r - j) & ann->mask32)]) = 0;
         }
     }
     for (;wakecnt != 0; wakecnt--) {
@@ -394,10 +394,13 @@ void     ann_next_m32(struct annihilator* ann, uint8_t stage, uint32_t no)
 
     ann_stage_finalizer_t *f = (ann_stage_finalizer_t*)((char*)(c) + sizeof(struct ann_stage_counters_m32));
 
-    f[(no & ann->mask32)] = 1;
-    int lcnt = __sync_add_and_fetch(&c->cnt_fre, 1);
-    if (lcnt > 1)
+    GET_STAGE_FIN(f[(no & ann->mask32)]) = 1;
+    int lcnt = __sync_fetch_and_add(&c->cnt_fre, 1);
+    if (lcnt > 0)
         return;
+
+    uint32_t tcnt = 0;
+    uint32_t lpos = 0;
 
     for (;;) {
         uint32_t sno;
@@ -409,24 +412,29 @@ void     ann_next_m32(struct annihilator* ann, uint8_t stage, uint32_t no)
         uint32_t wcnt = 0;
 
         for (; sno < z->progress_no; sno++) {
-            if (f[(sno & ann->mask32)] == 0)
+            if (GET_STAGE_FIN(f[(sno & ann->mask32)]) == 0)
                 break;
 
             wcnt++;
         }
 
         if (wcnt) {
-            uint32_t j;
-            for (j = wcnt; j > 0 ; --j) {
-                f[((c->ready_no - j) & ann->mask32)] = 0;
-            }
-
-            c->ready_no += wcnt;
+            lpos = (c->ready_no += wcnt);
+            tcnt += wcnt;
         }
 
         if (__sync_bool_compare_and_swap(&c->cnt_fre, lcnt, 0)) {
+            uint32_t j;
+            for (j = tcnt; j > 0 ; --j) {
+                GET_STAGE_FIN(f[((lpos - j) & ann->mask32)]) = 0;
+            }
+
             break;
         }
+
+        __sync_synchronize();
+
+        //PAUSE();
 
         lcnt = c->cnt_fre;
     }

@@ -17,21 +17,28 @@ extern "C" {
 
 
 #define ANN_MAX_STAGE_NAME    20
-#define ANN_MAX_NAME    16
-#define ANN_MAX_STAGES  16
+#define ANN_MAX_NAME          16
+#define ANN_MAX_STAGES        16
 
-#define ANN_BLOCK_ALIGN     64
+#define ANN_BLOCK_ALIGN       64
 
-
-#define STAGE_SIZE      ANN_BLOCK_ALIGN * 2
 
 enum ann_err {
-    AE_OK,
-    AE_INVALID_SIZE,
+    AE_OK,             /**< No errors */
+    AE_INVALID_SIZE    /**< Invalid size was supplied for shm operations */
 
 };
 
+#if 0
 typedef uint8_t ann_stage_finalizer_t;
+#define GET_STAGE_FIN(x)  (x)
+#else
+typedef struct {
+    uint64_t v[8];
+} ann_stage_finalizer_t;
+
+#define GET_STAGE_FIN(x)  (x).v[0]
+#endif
 
 enum ann_stage_lock_types {
     ANN_STL_SPIN,     /**< Spin locker */
@@ -40,11 +47,16 @@ enum ann_stage_lock_types {
     ANN_STL_POSIX_SEM /**< Posix semaphore locker */
 };
 
+/**
+ * @brief The ann_stage_types enum
+ *
+ * List all available concurency models
+ */
 enum ann_stage_types {
-    ANN_STC_SIN_SOUT,
-    ANN_STC_SIN_MOUT,
-    ANN_STC_MIN_SOUT,
-    ANN_STC_MIN_MOUT
+    ANN_STC_SIN_SOUT, /**< Single threaded input -> Single threaded output  */
+    ANN_STC_SIN_MOUT, /**< Single threaded input -> Multi threaded output  */
+    ANN_STC_MIN_SOUT, /**< Multi threaded input -> Single threaded output  */
+    ANN_STC_MIN_MOUT  /**< Multi threaded input -> Multi threaded output  */
 };
 
 struct ann_stage_def {
