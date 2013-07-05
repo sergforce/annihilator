@@ -14,6 +14,8 @@
 #include <sys/stat.h>        /* For mode constants */
 #include <fcntl.h>           /* For O_* constants */
 
+#include <xmmintrin.h>
+
 #ifdef USE64
 typedef uint64_t ann_no_t;
 #define ann_wait ann_wait64
@@ -66,11 +68,20 @@ typedef uint32_t ann_no_t;
 #error Unknown configuration to run
 #endif
 
+
+#define MAX_CPUS     64
+static int g_cpu_afinity_list[MAX_CPUS];
+static int g_cpu_cnt = 0;
+
+static int g_consumer_id = 0;
+static int g_producer_id = 0;
+
 int verbose_output = 0;
 int cpu_bench = 0;
 int group_thres = 100; // 10.0%
 
 int consumers = 1;
+int producers = 1;
 
 uint32_t cells = 256;
 uint32_t msg_size = 8;
@@ -116,18 +127,24 @@ static void *wait_thread(void* arg)
 {
     ann_no_t no;
     void* a;
+    int rcvd = 0;
+    int id = __sync_fetch_and_add(&g_consumer_id, 1);
 
     if (cpu_bench) {
         set_task(vec_i);
+    } else if (g_cpu_cnt > 0) {
+        set_task(g_cpu_afinity_list[id + producers]);
     }
 
-    started = 1;
+    __sync_fetch_and_add(&started, 1);
 
     for (;;) {
         no = ann_wait(pa, 1);
         a = ann_get(pa, no);
         if (*(char*)a == 1) {
-            return 0;
+            if (++rcvd == producers) {
+                return 0;
+            }
         }
 
         g_cnt++;
@@ -165,12 +182,11 @@ static int64_t prod_work()
     return ns;
 }
 
-static void *prod_thread(void* arg)
+static void run_consumers()
 {
     pthread_t th;
-    int k;
     int res;
-
+    int k;
     for (k = 0; k < consumers; k++) {
         res = pthread_create(&th, NULL, wait_thread, NULL);
         if (res) {
@@ -178,25 +194,58 @@ static void *prod_thread(void* arg)
         }
     }
 
+}
+
+static void *prod_thread(void* arg)
+{
+    int id = __sync_fetch_and_add(&g_producer_id, 1);
+
     if (cpu_bench) {
         set_task(vec_j);
+    } else if (g_cpu_cnt > 0) {
+        set_task(g_cpu_afinity_list[id]);
     }
 
-    while (!started);
+    __sync_fetch_and_add(&started, 1);
+
+    while (started != producers + consumers) {
+       __asm volatile ("pause" ::: "memory");
+    }
+
 
     int64_t ns = prod_work();
 
     if (cpu_bench) {
         adj_matrix[vec_i * numCPU + vec_j].ns = ns;
-        pthread_join(th, NULL);
+        //pthread_join(th, NULL);
+        usleep(200);
         sem_post(&sync_sem);
     } else {
-        printf("TEST(%s): C=%d M=%d N=%d took %12ld\n", VER,  cells, msg_size, count, ns);
-        printf("AVG : %.3f M/s\n", (((double)count * 1000)) / ns);
+        char buff[1024];
+        int pos = 0;
+        pos += snprintf(buff + pos, sizeof(buff) - pos, "TEST(%s): C=%d M=%d N=%d took %12ld\n", VER,  cells, msg_size, count, ns);
+        pos += snprintf(buff + pos, sizeof(buff) - pos, "AVG : %.3f M/s\n", (((double)count * 1000)) / ns);
+
+        fputs(buff, stderr);
     }
 
     return NULL;
 }
+
+static void run_producers(int sti)
+{
+    pthread_t th;
+    int res;
+    int k;
+    for (k = sti; k < producers; k++) {
+        res = pthread_create(&th, NULL, prod_thread, NULL);
+        if (res) {
+            exit(3);
+        }
+    }
+
+}
+
 
 static int uint64_t_cmp(const void *pa, const void *pb)
 {
@@ -260,11 +309,13 @@ static void create_shm(const char* name)
 }
 
 
+
+
 int main(int argc, char** argv)
 {
     int producer = 0, consumer = 0;
     int opt;
-    while ((opt = getopt(argc, argv, "PRt:vbc:m:n:hC:")) != -1) {
+    while ((opt = getopt(argc, argv, "PRt:vbc:m:n:hC:N:a:")) != -1) {
         switch (opt) {
         case 'P':
             producer = 1;
@@ -293,10 +344,46 @@ int main(int argc, char** argv)
         case 'C':
             consumers = atoi(optarg);
             break;
+        case 'N':
+            producers = atoi(optarg);
+            break;
+        case 'a':
+        {
+            char *p;
+            char *sub;
+            p = strtok_r(optarg, ",", &sub);
+            if (p == NULL)
+                break;
+
+            g_cpu_afinity_list[g_cpu_cnt++] = atoi(p);
+            for (;;) {
+                p = strtok_r(NULL, ",", &sub);
+                if (p == NULL)
+                    break;
+
+                g_cpu_afinity_list[g_cpu_cnt++] = atoi(p);
+            }
+            break;
+        }
         default: /* '?' */
             fprintf(stderr, "Usage: %s [-c calls] [-m msg_size]\n",
                     argv[0]);
             exit(EXIT_FAILURE);
+        }
+    }
+
+    if (g_cpu_cnt > 0) {
+        if (g_cpu_cnt != consumers + producers) {
+            printf("CPU AFINITY incorrect count: %d, Producers: %d, Consumers: %d\n",
+                   g_cpu_cnt, producers, consumers);
+        }
+        if (verbose_output) {
+            int k;
+            printf("CPU AFINITY: ");
+            for ( k = 0; k < g_cpu_cnt; k++ ) {
+                printf(" %d", g_cpu_afinity_list[k]);
+            }
+            printf("\n");
         }
     }
 
@@ -336,8 +423,6 @@ int main(int argc, char** argv)
 
         for (vec_i = 0; vec_i < numCPU; vec_i++) {
             for (vec_j = 0; vec_j < numCPU; vec_j++) {
-                pthread_t th;
-
                 if (vec_i == vec_j)
                     continue;
 
@@ -346,10 +431,8 @@ int main(int argc, char** argv)
                     exit(2);
                 }
 
-                int res = pthread_create(&th, NULL, prod_thread, NULL);
-                if (res) {
-                    exit(3);
-                }
+                run_consumers();
+                run_producers(0);
 
                 sem_wait(&sync_sem);
 
@@ -433,8 +516,13 @@ int main(int argc, char** argv)
             exit(2);
         }
 
+        run_consumers();
+        run_producers(1);
         prod_thread(NULL);
 
+        if (producers) {
+            sleep(1);
+        }
         ann_destroy(pa);
     }
 
