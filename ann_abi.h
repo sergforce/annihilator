@@ -106,8 +106,15 @@ struct ann_stage_counters64 {
 };
 
 struct ann_stage_counters_m32 {
-    int32_t progress_no;
-    char _dummy2[64 - 4];
+    union {
+        struct {
+            int32_t progress_no;
+            int32_t emb_avail;
+        };
+        int64_t dcsw;
+    };
+
+    char _dummy2[64 - 4 - 4];
     int32_t ready_no;
     char _dummy[64 - 4];
     int32_t cnt_fre;

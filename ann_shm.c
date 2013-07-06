@@ -5,6 +5,10 @@
 #include <malloc.h>
 #include <errno.h>
 
+
+//#define FAST_M
+
+
 #define PAUSE() \
      asm volatile ("pause\r\n" : : : "memory");
 
@@ -70,6 +74,10 @@ static void ann_init_stage(void* mem, const struct ann_stage_info *st, uint32_t 
             pcnt->available_count = readys;
             pcnt->progress_no = 0;
             pcnt->cnt_fre = 0;
+
+#ifdef FAST_M
+            ((struct ann_stage_counters_m32*)pcnt)->emb_avail = readys;
+#endif
             break;
         }
         default: {
@@ -243,7 +251,7 @@ uint32_t ann_wait32(struct annihilator* ann, uint8_t stage)
     while (c->ready_no == c->progress_no) {
         PAUSE();
 
-        __sync_synchronize();
+        //__sync_synchronize();
 
     }
     return c->progress_no++;
@@ -368,13 +376,9 @@ void     ann_next_sem_m32(struct annihilator* ann, uint8_t stage, uint32_t no)
             break;
         }
 
-        __sync_synchronize();
+        PAUSE();
 
         lcnt = c->cnt_fre;
-
-        __sync_synchronize();
-
-
     }
 
     if (wakecnt != 0) {
@@ -393,23 +397,32 @@ void     ann_next_sem_m32(struct annihilator* ann, uint8_t stage, uint32_t no)
 uint32_t ann_wait_m32(struct annihilator* ann, uint8_t stage)
 {
     struct ann_stage_counters_m32* c = ( struct ann_stage_counters_m32*)ann->stages[stage];
-#if 0
-    // This implementation is not safe
-    while (c->ready_no == c->progress_no) {
+#ifdef FAST_M
+    for (;;) {
+        union {
+            struct {
+                int32_t progress_no;
+                int32_t emb_avail;
+            };
+            int64_t dcsw;
+        } local;
+
+        local.dcsw = c->dcsw;
+        if (local.emb_avail != 0) {
+
+            if (__sync_bool_compare_and_swap(&c->dcsw, local.dcsw, local.dcsw + 1 - 0x100000000)) {
+                return local.progress_no;
+            }
+
+        }
+
         PAUSE();
-
-        __sync_synchronize();
-
     }
-    return __sync_fetch_and_add(&c->progress_no, 1);
 #else
-
     for (;;) {
         uint32_t cnt;
         while ((cnt = c->available_count) == 0) {
             PAUSE();
-            __sync_synchronize();
-
         }
         if (__sync_bool_compare_and_swap(&c->available_count, cnt, cnt - 1)) {
             return __sync_fetch_and_add(&c->progress_no, 1);
@@ -417,7 +430,6 @@ uint32_t ann_wait_m32(struct annihilator* ann, uint8_t stage)
 
         PAUSE();
     }
-
 #endif
 }
 
@@ -460,7 +472,11 @@ void     ann_next_m32(struct annihilator* ann, uint8_t stage, uint32_t no)
             tcnt += wcnt;
         }
 
+#ifdef FAST_M
+        c->emb_avail += wcnt;
+#else
         c->available_count += wcnt;
+#endif
 
         if (__sync_bool_compare_and_swap(&c->cnt_fre, lcnt, 0)) {
             uint32_t j;
@@ -471,9 +487,9 @@ void     ann_next_m32(struct annihilator* ann, uint8_t stage, uint32_t no)
             break;
         }
 
-        __sync_synchronize();
+        //__sync_synchronize();
 
-        //PAUSE();
+        PAUSE();
 
         lcnt = c->cnt_fre;
     }
