@@ -112,6 +112,8 @@ struct ann_stage_counters_m32 {
     char _dummy[64 - 4];
     int32_t cnt_fre;
     char _dummy3[64 - 4];
+    int32_t available_count;
+    char _dummy4[64 - 4];
 };
 
 struct ann_stage_counters_m64 {
@@ -121,6 +123,8 @@ struct ann_stage_counters_m64 {
     char _dummy[64 - 8];
     int64_t cnt_fre;
     char _dummy3[64 - 8];
+    int64_t available_count;
+    char _dummy4[64 - 8];
 };
 
 #ifdef __linux

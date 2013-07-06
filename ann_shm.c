@@ -63,9 +63,22 @@ static void ann_init_stage(void* mem, const struct ann_stage_info *st, uint32_t 
 
     switch (stinfo->stage_lock_type) {
     case ANN_STL_SPIN: {
-        struct ann_stage_counters64* pcnt = (struct ann_stage_counters64*)mem;
-        pcnt->ready_no = readys;
-        pcnt->progress_no = 0;
+        switch (stinfo->stage_concurrency) {
+        case ANN_STC_MIN_MOUT: {
+            struct ann_stage_counters_m64* pcnt = (struct ann_stage_counters_m64*)mem;
+            pcnt->ready_no = readys;
+            pcnt->available_count = readys;
+            pcnt->progress_no = 0;
+            pcnt->cnt_fre = 0;
+            break;
+        }
+        default: {
+            struct ann_stage_counters64* pcnt = (struct ann_stage_counters64*)mem;
+            pcnt->ready_no = readys;
+            pcnt->progress_no = 0;
+            break;
+        }
+        }
         break;
     }
     case ANN_STL_POSIX_SEM: {
@@ -355,7 +368,13 @@ void     ann_next_sem_m32(struct annihilator* ann, uint8_t stage, uint32_t no)
             break;
         }
 
+        __sync_synchronize();
+
         lcnt = c->cnt_fre;
+
+        __sync_synchronize();
+
+
     }
 
     if (wakecnt != 0) {
@@ -373,8 +392,9 @@ void     ann_next_sem_m32(struct annihilator* ann, uint8_t stage, uint32_t no)
 
 uint32_t ann_wait_m32(struct annihilator* ann, uint8_t stage)
 {
-    struct ann_stage_counters32* c = ( struct ann_stage_counters32*)ann->stages[stage];
-
+    struct ann_stage_counters_m32* c = ( struct ann_stage_counters_m32*)ann->stages[stage];
+#if 0
+    // This implementation is not safe
     while (c->ready_no == c->progress_no) {
         PAUSE();
 
@@ -382,6 +402,23 @@ uint32_t ann_wait_m32(struct annihilator* ann, uint8_t stage)
 
     }
     return __sync_fetch_and_add(&c->progress_no, 1);
+#else
+
+    for (;;) {
+        uint32_t cnt;
+        while ((cnt = c->available_count) == 0) {
+            PAUSE();
+            __sync_synchronize();
+
+        }
+        if (__sync_bool_compare_and_swap(&c->available_count, cnt, cnt - 1)) {
+            return __sync_fetch_and_add(&c->progress_no, 1);
+        }
+
+        PAUSE();
+    }
+
+#endif
 }
 
 void     ann_next_m32(struct annihilator* ann, uint8_t stage, uint32_t no)
@@ -422,6 +459,8 @@ void     ann_next_m32(struct annihilator* ann, uint8_t stage, uint32_t no)
             lpos = (c->ready_no += wcnt);
             tcnt += wcnt;
         }
+
+        c->available_count += wcnt;
 
         if (__sync_bool_compare_and_swap(&c->cnt_fre, lcnt, 0)) {
             uint32_t j;
