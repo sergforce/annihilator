@@ -8,6 +8,7 @@
 
 //#define FAST_M
 
+#define CELLS_RESERVED 8
 
 #define PAUSE() \
      asm volatile ("pause\r\n" : : : "memory");
@@ -182,7 +183,7 @@ int ann_shm_create(void* mem, uint32_t cells, uint8_t stages, uint32_t msg_size,
 
         a->stages[i] = (char*)h + stoffs[i];//stages_off + i * STAGE_SIZE;
 
-        ann_init_stage(a->stages[i], &h->stages_inf[i], (i == 0) ? cells : 0, shmuse);
+        ann_init_stage(a->stages[i], &h->stages_inf[i], (i == 0) ? cells  - CELLS_RESERVED : 0, shmuse);
     }
 
     return AE_OK;
@@ -326,12 +327,16 @@ uint32_t ann_wait_sem_m32(struct annihilator* ann, uint8_t stage)
             if (errno == EAGAIN) {
                 PAUSE();
                 continue;
+            } else {
+                abort();
             }
         } else {
             break;
         }
     }
-    return __sync_fetch_and_add(&c->progress_no, 1);
+
+    uint32_t r = __sync_fetch_and_add(&c->progress_no, 1);
+    return r;
 }
 
 void     ann_next_sem_m32(struct annihilator* ann, uint8_t stage, uint32_t no)
@@ -344,32 +349,34 @@ void     ann_next_sem_m32(struct annihilator* ann, uint8_t stage, uint32_t no)
 
     ann_stage_finalizer_t *f = (ann_stage_finalizer_t*)((char*)(c) + sizeof(struct ann_stage_counters_sem_m32));
     uint32_t wakecnt = 0;
-    uint32_t last_r;
 
     GET_STAGE_FIN(f[(no & ann->mask32)]) = 1;
+
     int lcnt = __sync_add_and_fetch(&c->cnt_fre, 1);
     if (lcnt > 1)
         return;
 
-    for (;;) {
-        uint32_t sno;
-        if (stage + 1 == ann->stages_num)
-            sno = c->ready_no - ann->cells;
-        else
-            sno = c->ready_no;
+    uint32_t sno;
+    if (stage + 1 == ann->stages_num)
+        sno = c->ready_no - (ann->cells - CELLS_RESERVED);
+    else
+        sno = c->ready_no;
 
+    for (;;) {
         uint32_t wcnt = 0;
+
 
         for (; sno < z->progress_no; sno++) {
             if (GET_STAGE_FIN(f[(sno & ann->mask32)]) == 0)
                 break;
 
+            GET_STAGE_FIN(f[(sno & ann->mask32)]) = 0;
             wcnt++;
         }
 
         if (wcnt) {
             wakecnt += wcnt;
-            last_r = (c->ready_no += wcnt);
+            c->ready_no += wcnt;
         }
 
         if (__sync_bool_compare_and_swap(&c->cnt_fre, lcnt, 0)) {
@@ -381,13 +388,8 @@ void     ann_next_sem_m32(struct annihilator* ann, uint8_t stage, uint32_t no)
         lcnt = c->cnt_fre;
     }
 
-    if (wakecnt != 0) {
-        int j = wakecnt;
-        for (; j > 0 ; --j) {
-            GET_STAGE_FIN(f[((last_r - j) & ann->mask32)]) = 0;
-        }
-    }
-    for (;wakecnt != 0; wakecnt--) {
+    int w = wakecnt;
+    for (;w != 0; w--) {
         sem_post(&c->sem);
     }
 
@@ -448,13 +450,15 @@ void     ann_next_m32(struct annihilator* ann, uint8_t stage, uint32_t no)
     if (lcnt > 0)
         return;
 
+    ++lcnt;
+
     uint32_t tcnt = 0;
     uint32_t lpos = 0;
 
     for (;;) {
         uint32_t sno;
         if (stage + 1 == ann->stages_num)
-            sno = c->ready_no - ann->cells;
+            sno = c->ready_no - (ann->cells - CELLS_RESERVED);
         else
             sno = c->ready_no;
 
