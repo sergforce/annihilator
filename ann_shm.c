@@ -356,14 +356,13 @@ void     ann_next_sem_m32(struct annihilator* ann, uint8_t stage, uint32_t no)
     if (lcnt > 1)
         return;
 
-    uint32_t sno;
-    if (stage + 1 == ann->stages_num)
-        sno = c->ready_no - (ann->cells - CELLS_RESERVED);
-    else
-        sno = c->ready_no;
-
     for (;;) {
         uint32_t wcnt = 0;
+        uint32_t sno;
+        if (stage + 1 == ann->stages_num)
+            sno = c->ready_no - (ann->cells - CELLS_RESERVED);
+        else
+            sno = c->ready_no;
 
 
         for (; sno < z->progress_no; sno++) {
@@ -446,14 +445,11 @@ void     ann_next_m32(struct annihilator* ann, uint8_t stage, uint32_t no)
     ann_stage_finalizer_t *f = (ann_stage_finalizer_t*)((char*)(c) + sizeof(struct ann_stage_counters_m32));
 
     GET_STAGE_FIN(f[(no & ann->mask32)]) = 1;
-    int lcnt = __sync_fetch_and_add(&c->cnt_fre, 1);
-    if (lcnt > 0)
+    int lcnt = __sync_add_and_fetch(&c->cnt_fre, 1);
+    if (lcnt > 1)
         return;
 
-    ++lcnt;
-
     uint32_t tcnt = 0;
-    uint32_t lpos = 0;
 
     for (;;) {
         uint32_t sno;
@@ -468,11 +464,12 @@ void     ann_next_m32(struct annihilator* ann, uint8_t stage, uint32_t no)
             if (GET_STAGE_FIN(f[(sno & ann->mask32)]) == 0)
                 break;
 
+            GET_STAGE_FIN(f[(sno & ann->mask32)]) = 0;
             wcnt++;
         }
 
         if (wcnt) {
-            lpos = (c->ready_no += wcnt);
+            c->ready_no += wcnt;
             tcnt += wcnt;
         }
 
@@ -483,15 +480,8 @@ void     ann_next_m32(struct annihilator* ann, uint8_t stage, uint32_t no)
 #endif
 
         if (__sync_bool_compare_and_swap(&c->cnt_fre, lcnt, 0)) {
-            uint32_t j;
-            for (j = tcnt; j > 0 ; --j) {
-                GET_STAGE_FIN(f[((lpos - j) & ann->mask32)]) = 0;
-            }
-
             break;
         }
-
-        //__sync_synchronize();
 
         PAUSE();
 
