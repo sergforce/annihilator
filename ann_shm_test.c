@@ -15,6 +15,7 @@
 #include <fcntl.h>           /* For O_* constants */
 
 #include <xmmintrin.h>
+#include <assert.h>
 
 #ifdef USE64
 typedef uint64_t ann_no_t;
@@ -70,6 +71,9 @@ typedef uint32_t ann_no_t;
 
 
 #define MAX_CPUS     64
+static pthread_t g_thr_producers[MAX_CPUS];
+static pthread_t g_thr_consumers[MAX_CPUS];
+
 static int g_cpu_afinity_list[MAX_CPUS];
 static int g_cpu_cnt = 0;
 
@@ -121,7 +125,11 @@ void set_task(int j)
     }
 }
 
-static __thread int g_cnt;
+static __thread int64_t g_cnt;
+
+static __thread  ann_no_t failed_no;
+static __thread  char*    failed_a;
+static __thread  char     failed_ra;
 
 static void *wait_thread(void* arg)
 {
@@ -139,13 +147,32 @@ static void *wait_thread(void* arg)
     __sync_fetch_and_add(&started, 1);
 
     for (;;) {
+        char ra;
+
         no = ann_wait(pa, 1);
         a = ann_get(pa, no);
-        if (*(char*)a == 1) {
+
+        ra = *(char*)a;
+
+        if (ra == -1) {
             if (++rcvd == producers) {
-                return 0;
+                ann_next(pa, 1, no);
+                return (void*)g_cnt;
+            }
+        } else {
+            if (((no * no) & 0x7f) != ra) {
+                failed_no = no;
+                failed_a = a;
+                failed_ra = ra;
+
+                fprintf(stderr, "CHECK FAILED at no=%ld a=%x ra=%x  must be %lx\n",
+                        (long)failed_no, *failed_a, failed_ra, (((long)no * no) & 0x7f));
+
+                abort();
             }
         }
+
+        *(char*)a = -5;
 
         g_cnt++;
 
@@ -165,16 +192,28 @@ static int64_t prod_work()
     for (i = 0; i < count; i++) {
         no = ann_wait(pa, 0);
         a = ann_get(pa, no);
-        (*(char*)a) = 0;
+
+        (*(char*)a) = (no*no) & 0x7f;
 
         g_cnt++;
 
-         ann_next(pa, 0, no);
+        ann_next(pa, 0, no);
+
     }
-    no = ann_wait(pa, 0);
-    a = ann_get(pa, no);
-    (*(char*)a) = 1;
-     ann_next(pa, 0, no);
+
+    for (i = 0; i < consumers; i++) {
+        no = ann_wait(pa, 0);
+        a = ann_get(pa, no);
+
+        __asm volatile ( "mfence" ::: "memory");
+
+        (*(char*)a) = -1;
+
+        __asm volatile ( "mfence" ::: "memory");
+
+        ann_next(pa, 0, no);
+    }
+
     res = clock_gettime(CLOCK_REALTIME, &ts2);
     (void)res;
 
@@ -184,16 +223,24 @@ static int64_t prod_work()
 
 static void run_consumers()
 {
-    pthread_t th;
     int res;
     int k;
     for (k = 0; k < consumers; k++) {
-        res = pthread_create(&th, NULL, wait_thread, NULL);
+        res = pthread_create(&g_thr_consumers[k], NULL, wait_thread, NULL);
         if (res) {
             exit(3);
         }
     }
+}
 
+static void wait_consumers()
+{
+    int k;
+    void* ret;
+    for (k = 0; k < consumers; k++) {
+        pthread_join(g_thr_consumers[k], &ret);
+        printf("CONSUMER[%d]: processed %ld\n", k, (int64_t)ret);
+    }
 }
 
 static void *prod_thread(void* arg)
@@ -234,17 +281,24 @@ static void *prod_thread(void* arg)
 
 static void run_producers(int sti)
 {
-    pthread_t th;
     int res;
     int k;
     for (k = sti; k < producers; k++) {
-        res = pthread_create(&th, NULL, prod_thread, NULL);
+        res = pthread_create(&g_thr_producers[k], NULL, prod_thread, NULL);
         if (res) {
             exit(3);
         }
     }
-
 }
+
+static void wait_producers(int sti)
+{
+    int k;
+    for (k = sti; k < producers; k++) {
+          pthread_join(g_thr_producers[k], NULL);
+    }
+}
+
 
 
 static int uint64_t_cmp(const void *pa, const void *pb)
@@ -518,11 +572,15 @@ int main(int argc, char** argv)
 
         run_consumers();
         run_producers(1);
-        prod_thread(NULL);
 
-        if (producers) {
-            sleep(1);
-        }
+        prod_thread(NULL);
+        wait_producers(1);
+
+        printf("finalizing...\n");
+        wait_consumers();
+
+
+
         ann_destroy(pa);
     }
 

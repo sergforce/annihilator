@@ -322,6 +322,14 @@ uint32_t ann_wait_sem_m32(struct annihilator* ann, uint8_t stage)
 
     int res;
     for (;;) {
+        int val = 0;
+        for (;;) {
+            sem_getvalue(&c->sem, &val);
+            if (val != 0)
+                break;
+            PAUSE();
+        }
+
         res = sem_trywait(&c->sem);
         if (res == -1) {
             if (errno == EAGAIN) {
@@ -387,10 +395,14 @@ void     ann_next_sem_m32(struct annihilator* ann, uint8_t stage, uint32_t no)
         lcnt = c->cnt_fre;
     }
 
+
     int w = wakecnt;
     for (;w != 0; w--) {
         sem_post(&c->sem);
     }
+    //if (wakecnt) {
+    //    __sync_add_and_fetch((volatile int64_t*)&c->sem, wakecnt);
+    //}
 
 }
 
