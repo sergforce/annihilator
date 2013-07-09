@@ -205,11 +205,7 @@ static int64_t prod_work()
         no = ann_wait(pa, 0);
         a = ann_get(pa, no);
 
-        __asm volatile ( "mfence" ::: "memory");
-
         (*(char*)a) = -1;
-
-        __asm volatile ( "mfence" ::: "memory");
 
         ann_next(pa, 0, no);
     }
@@ -239,7 +235,9 @@ static void wait_consumers()
     void* ret;
     for (k = 0; k < consumers; k++) {
         pthread_join(g_thr_consumers[k], &ret);
-        printf("CONSUMER[%d]: processed %ld\n", k, (int64_t)ret);
+        if (!cpu_bench || verbose_output) {
+            printf("CONSUMER[%d]: processed %ld\n", k, (int64_t)ret);
+        }
     }
 }
 
@@ -265,8 +263,9 @@ static void *prod_thread(void* arg)
     if (cpu_bench) {
         adj_matrix[vec_i * numCPU + vec_j].ns = ns;
         //pthread_join(th, NULL);
-        usleep(200);
-        sem_post(&sync_sem);
+        //usleep(200);
+        //sem_post(&sync_sem);
+
     } else {
         char buff[1024];
         int pos = 0;
@@ -485,10 +484,17 @@ int main(int argc, char** argv)
                     exit(2);
                 }
 
+                g_producer_id = 0;
+                g_consumer_id = 0;
+                started = 0;
+
                 run_consumers();
                 run_producers(0);
 
-                sem_wait(&sync_sem);
+                //sem_wait(&sync_sem);
+
+                wait_producers(0);
+                wait_consumers();
 
                 ann_destroy(pa);
 

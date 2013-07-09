@@ -484,14 +484,24 @@ void     ann_next_m32(struct annihilator* ann, uint8_t stage, uint32_t no)
             c->ready_no += wcnt;
             tcnt += wcnt;
         }
-
+#if 1
 #ifdef FAST_M
-        c->emb_avail += wcnt;
+        //c->emb_avail += wcnt;
+        __sync_fetch_and_add(&c->emb_avail, wcnt);
 #else
-        c->available_count += wcnt;
+        //c->available_count += wcnt;
+        __sync_fetch_and_add(&c->available_count, wcnt);
+#endif
 #endif
 
         if (__sync_bool_compare_and_swap(&c->cnt_fre, lcnt, 0)) {
+#if 0
+#ifdef FAST_M
+            __sync_fetch_and_add(&c->emb_avail, tcnt);
+#else
+            __sync_fetch_and_add(&c->available_count, tcnt);
+#endif
+#endif
             break;
         }
 
