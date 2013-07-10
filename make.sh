@@ -1,12 +1,21 @@
 #!/bin/sh
 
-gcc -flto -O3 -g -Wall ann_shm.c ann_shm_test.c -DNDEBUG -DUSE64 -I. -o test_gcc_64 -lrt
-gcc -flto  -O3 -g -Wall ann_shm.c ann_shm_test.c -DNDEBUG -DUSE32 -I. -o test_gcc_32 -lrt
-gcc -flto  -O3 -g -Wall ann_shm.c ann_shm_test.c -DNDEBUG -DUSE16 -I. -o test_gcc_16 -lrt
+CC="gcc"
+DEBUG="-g -DNDEBUG"
+OPT="-flto -O3 -march=native "
 
-gcc -flto  -O3 -g -Wall ann_shm.c ann_shm_test.c -DNDEBUG -DUSE_SEM32 -I. -o test_gcc_sem_32 -lrt
-gcc -flto  -O3 -g -Wall ann_shm.c ann_shm_test.c -DNDEBUG -DUSE_SEM_M32 -I. -o test_gcc_sem_m_32 -lrt
-gcc -flto  -O3 -g -Wall ann_shm.c ann_shm_test.c -DNDEBUG -DUSE_M32 -I. -o test_gcc_m_32 -lrt
+$CC $OPT $DEBUG -Wall ann_shm.c ann_shm_test.c -DUSE64 -I. -o test_gcc_64 -lrt -lpthread    || exit 1
+$CC $OPT $DEBUG -Wall ann_shm.c ann_shm_test.c -DUSE32 -I. -o test_gcc_32 -lrt -lpthread
+$CC $OPT $DEBUG -Wall ann_shm.c ann_shm_test.c -DUSE16 -I. -o test_gcc_16 -lrt -lpthread
 
-gcc -flto  -O3 -g -Wall ann_shm.c ann_shm_test.c -DNDEBUG -DUSE_M32 -DFAST_M -I. -o test_gcc_fast_m_32 -lrt
+$CC $OPT $DEBUG -Wall ann_shm.c ann_shm_test.c -DUSE_SEM32 -I. -o test_gcc_sem_32 -lrt  -lpthread
+$CC $OPT $DEBUG -Wall ann_shm.c ann_shm_test.c -DUSE_SEM_M32 -I. -o test_gcc_sem_m_32 -lrt  -lpthread
+$CC $OPT $DEBUG -Wall ann_shm.c ann_shm_test.c -DUSE_M32 -I. -o test_gcc_m_32 -lrt  -lpthread
+
+$CC $OPT $DEBUG -Wall ann_shm.c ann_shm_test.c -DUSE_M32 -DFAST_M -I. -o test_gcc_fast_m_32 -lrt  -lpthread
+
+
+$CC $OPT $DEBUG -Wall ann_shm.c ann_shm_test.c -DUSE_M32_SC -I. -o test_gcc_m_32_scmp -lrt  -lpthread
+
+$CC $OPT $DEBUG -Wall ann_shm.c ann_shm_test.c -DUSE_M32_SP -I. -o test_gcc_m_32_mcsp -lrt  -lpthread
 

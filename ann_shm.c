@@ -512,6 +512,84 @@ void     ann_next_m32(struct annihilator* ann, uint8_t stage, uint32_t no)
 }
 
 
+void     ann_next_m32_simo(struct annihilator* ann, uint8_t stage, uint32_t no)
+{
+    if (stage + 1 == ann->stages_num) {
+        struct ann_stage_counters_m32* c = ( struct ann_stage_counters_m32*)ann->stages[0];
+        //Release
+        //check endNo
+        uint32_t old = c->ready_no++;
+        assert (old - no == ann->cells);
+        (void)old;
+
+#ifdef FAST_M
+        __sync_fetch_and_add(&c->emb_avail, 1);
+#else
+        __sync_fetch_and_add(&c->available_count, 1);
+#endif
+    } else {
+        struct ann_stage_counters_m32* c = ( struct ann_stage_counters_m32*)ann->stages[stage + 1];
+        ++c->ready_no;
+
+#ifdef FAST_M
+        __sync_fetch_and_add(&c->emb_avail, 1);
+#else
+        __sync_fetch_and_add(&c->available_count, 1);
+#endif
+    }
+}
+
+
+void     ann_next_m32_miso(struct annihilator* ann, uint8_t stage, uint32_t no)
+{
+    struct ann_stage_counters_m32* c = (stage + 1 == ann->stages_num) ?
+        ( struct ann_stage_counters_m32*)ann->stages[0] :
+        ( struct ann_stage_counters_m32*)ann->stages[stage + 1];
+
+    struct ann_stage_counters_m32* z = ( struct ann_stage_counters_m32*)ann->stages[stage];
+
+    ann_stage_finalizer_t *f = (ann_stage_finalizer_t*)((char*)(c) + sizeof(struct ann_stage_counters_m32));
+
+    GET_STAGE_FIN(f[(no & ann->mask32)]) = 1;
+    int lcnt = __sync_add_and_fetch(&c->cnt_fre, 1);
+    if (lcnt > 1)
+        return;
+
+    uint32_t tcnt = 0;
+
+    for (;;) {
+        uint32_t sno;
+        if (stage + 1 == ann->stages_num)
+            sno = c->ready_no - (ann->cells - CELLS_RESERVED);
+        else
+            sno = c->ready_no;
+
+        uint32_t wcnt = 0;
+
+        for (; sno < z->progress_no; sno++) {
+            if (GET_STAGE_FIN(f[(sno & ann->mask32)]) == 0)
+                break;
+
+            GET_STAGE_FIN(f[(sno & ann->mask32)]) = 0;
+            wcnt++;
+        }
+
+        if (wcnt) {
+            c->ready_no += wcnt;
+            tcnt += wcnt;
+        }
+
+        if (__sync_bool_compare_and_swap(&c->cnt_fre, lcnt, 0)) {
+            break;
+        }
+
+        PAUSE();
+
+        lcnt = c->cnt_fre;
+    }
+}
+
+
 void*    ann_get32(struct annihilator* ann, uint32_t no)
 {
     return ann->data_buffer + (no & ann->mask32) * ann->msg_size;

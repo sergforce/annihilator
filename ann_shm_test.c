@@ -19,52 +19,92 @@
 
 #ifdef USE64
 typedef uint64_t ann_no_t;
-#define ann_wait ann_wait64
+#define ann_wait_p ann_wait64
+#define ann_wait_c ann_wait64
+#define ann_next_p ann_next64
+#define ann_next_c ann_next64
 #define ann_get  ann_get64
-#define ann_next ann_next64
 #define VER        "64bit"
 #define LOCK_TYPE  ANN_STL_SPIN
-#define CONCUR     ANN_STC_SIN_SOUT
+#define CONCUR_P   ANN_STC_SIN_SOUT
+#define CONCUR_C   ANN_STC_SIN_SOUT
 #elif defined(USE16)
 typedef uint16_t ann_no_t;
-#define ann_wait ann_wait16
+#define ann_wait_p ann_wait16
+#define ann_wait_c ann_wait16
+#define ann_next_p ann_next16
+#define ann_next_c ann_next16
 #define ann_get  ann_get16
-#define ann_next ann_next16
 #define VER "16bit"
 #define LOCK_TYPE  ANN_STL_SPIN
-#define CONCUR     ANN_STC_SIN_SOUT
+#define CONCUR_P   ANN_STC_SIN_SOUT
+#define CONCUR_C   ANN_STC_SIN_SOUT
 #elif defined(USE32)
 typedef uint32_t ann_no_t;
-#define ann_wait ann_wait32
+#define ann_wait_p ann_wait32
+#define ann_wait_c ann_wait32
+#define ann_next_p ann_next32
+#define ann_next_c ann_next32
 #define ann_get  ann_get32
-#define ann_next ann_next32
 #define VER "32bit"
 #define LOCK_TYPE  ANN_STL_SPIN
-#define CONCUR     ANN_STC_SIN_SOUT
+#define CONCUR_P   ANN_STC_SIN_SOUT
+#define CONCUR_C   ANN_STC_SIN_SOUT
 #elif defined(USE_SEM32)
 typedef uint32_t ann_no_t;
-#define ann_wait ann_wait_sem32
+#define ann_wait_p ann_wait_sem32
+#define ann_wait_c ann_wait_sem32
+#define ann_next_p ann_next_sem32
+#define ann_next_c ann_next_sem32
 #define ann_get  ann_get32
-#define ann_next ann_next_sem32
 #define VER "32bit(sem)"
 #define LOCK_TYPE  ANN_STL_POSIX_SEM
-#define CONCUR     ANN_STC_SIN_SOUT
+#define CONCUR_P   ANN_STC_SIN_SOUT
+#define CONCUR_C   ANN_STC_SIN_SOUT
 #elif defined(USE_SEM_M32)
 typedef uint32_t ann_no_t;
-#define ann_wait ann_wait_sem_m32
+#define ann_wait_p ann_wait_sem_m32
+#define ann_wait_c ann_wait_sem_m32
+#define ann_next_p ann_next_sem_m32
+#define ann_next_c ann_next_sem_m32
 #define ann_get  ann_get32
-#define ann_next ann_next_sem_m32
 #define VER "32bit(sem mthread)"
 #define LOCK_TYPE  ANN_STL_POSIX_SEM
-#define CONCUR     ANN_STC_MIN_MOUT
+#define CONCUR_P   ANN_STC_MIN_MOUT
+#define CONCUR_C   ANN_STC_MIN_MOUT
 #elif defined(USE_M32)
 typedef uint32_t ann_no_t;
-#define ann_wait ann_wait_m32
+#define ann_wait_p ann_wait_m32
+#define ann_wait_c ann_wait_m32
+#define ann_next_p ann_next_m32
+#define ann_next_c ann_next_m32
 #define ann_get  ann_get32
-#define ann_next ann_next_m32
 #define VER "32bit(mthread)"
 #define LOCK_TYPE  ANN_STL_SPIN
-#define CONCUR     ANN_STC_MIN_MOUT
+#define CONCUR_P   ANN_STC_MIN_MOUT
+#define CONCUR_C   ANN_STC_MIN_MOUT
+#elif defined(USE_M32_SC)
+typedef uint32_t ann_no_t;
+#define ann_wait_c ann_wait32
+#define ann_wait_p ann_wait_m32
+#define ann_next_c ann_next_m32_simo
+#define ann_next_p ann_next_m32_miso
+#define ann_get    ann_get32
+#define VER "32bit(SC - MP)"
+#define LOCK_TYPE  ANN_STL_SPIN
+#define CONCUR_P   ANN_STC_MIN_MOUT
+#define CONCUR_C   ANN_STC_MIN_MOUT
+#elif defined(USE_M32_SP)
+typedef uint32_t ann_no_t;
+#define ann_wait_p ann_wait32
+#define ann_wait_c ann_wait_m32
+#define ann_next_p ann_next_m32_simo
+#define ann_next_c ann_next_m32_miso
+#define ann_get    ann_get32
+#define VER "32bit(MC - SP)"
+#define LOCK_TYPE  ANN_STL_SPIN
+#define CONCUR_P   ANN_STC_MIN_MOUT
+#define CONCUR_C   ANN_STC_MIN_MOUT
 #else
 #error Unknown configuration to run
 #endif
@@ -105,8 +145,8 @@ int vec_i;
 int vec_j;
 
 const static struct ann_stage_def nfo[2] = {
-    { 1, 1, LOCK_TYPE, CONCUR },
-    { 1, 1, LOCK_TYPE, CONCUR }
+    { 1, 1, LOCK_TYPE, CONCUR_P }, //Produce stage
+    { 1, 1, LOCK_TYPE, CONCUR_C }  //Consumer stage
 };
 
 static char shared_mem_name[512] = "/ann-shared";
@@ -149,14 +189,14 @@ static void *wait_thread(void* arg)
     for (;;) {
         char ra;
 
-        no = ann_wait(pa, 1);
+        no = ann_wait_c(pa, 1);
         a = ann_get(pa, no);
 
         ra = *(char*)a;
 
         if (ra == -1) {
             if (++rcvd == producers) {
-                ann_next(pa, 1, no);
+                ann_next_c(pa, 1, no);
                 return (void*)g_cnt;
             }
         } else {
@@ -177,7 +217,7 @@ static void *wait_thread(void* arg)
         g_cnt++;
 
 
-        ann_next(pa, 1, no);
+        ann_next_c(pa, 1, no);
     }
 }
 
@@ -190,24 +230,24 @@ static int64_t prod_work()
     int res = clock_gettime(CLOCK_REALTIME, &ts1);
 
     for (i = 0; i < count; i++) {
-        no = ann_wait(pa, 0);
+        no = ann_wait_p(pa, 0);
         a = ann_get(pa, no);
 
         (*(char*)a) = (no*no) & 0x7f;
 
         g_cnt++;
 
-        ann_next(pa, 0, no);
+        ann_next_p(pa, 0, no);
 
     }
 
     for (i = 0; i < consumers; i++) {
-        no = ann_wait(pa, 0);
+        no = ann_wait_p(pa, 0);
         a = ann_get(pa, no);
 
         (*(char*)a) = -1;
 
-        ann_next(pa, 0, no);
+        ann_next_p(pa, 0, no);
     }
 
     res = clock_gettime(CLOCK_REALTIME, &ts2);
