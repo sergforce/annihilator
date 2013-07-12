@@ -79,7 +79,7 @@ static void set_task(int j)
 
 static void *thread(void* arg)
 {
-    uint64_t i;
+    register uint64_t i;
 
     if (cpu_bench) {
         set_task(vec_i);
@@ -100,7 +100,8 @@ static void *thread(void* arg)
     switch (test) {
     case AT_XADD:
         for (i = 0; i < count; ++i) {
-            __sync_fetch_and_add(&g_t.data, 1);
+            //__sync_fetch_and_add(&g_t.data, 1);
+            __sync_add_and_fetch(&g_t.data, 1);
         }
         break;
 
@@ -157,6 +158,8 @@ int main(int argc, char** argv)
     int k;
     int opt;
     int res;
+    int start_test = AT_XADD;
+    int last_test = AT_XCHG;
 
     while ((opt = getopt(argc, argv, "f:t:n:a:b")) != -1) {
         switch (opt) {
@@ -165,6 +168,8 @@ int main(int argc, char** argv)
             break;
         case 't':
             test = atoi(optarg);
+            start_test = test;
+            last_test = test;
             break;
         case 'n':
             count = atoi(optarg);
@@ -212,22 +217,27 @@ int main(int argc, char** argv)
         }
     }
 
-    for (k = 0; k < threads; k++) {
-        res = pthread_create(&g_thr[k], NULL, thread, NULL);
-        if (res) {
-            exit(3);
+    for (test = start_test; test <= last_test; ++test)
+    {
+        started = 0;
+        g_thread_id = 0;
+
+        for (k = 0; k < threads; k++) {
+            res = pthread_create(&g_thr[k], NULL, thread, NULL);
+            if (res) {
+                exit(3);
+            }
+        }
+
+        void* ret;
+        for (k = 0; k < threads; k++) {
+            pthread_join(g_thr[k], &ret);
+            if (!cpu_bench || verbose_output) {
+                int64_t ns = (int64_t)ret;
+                printf("THREAD[%d]: AVG : %.3f M/s\n", k, (((double)count * 1000)) / ns);
+            }
         }
     }
-
-    void* ret;
-    for (k = 0; k < threads; k++) {
-        pthread_join(g_thr[k], &ret);
-        if (!cpu_bench || verbose_output) {
-            int64_t ns = (int64_t)ret;
-            printf("THREAD[%d]: AVG : %.3f M/s\n", k, (((double)count * 1000)) / ns);
-        }
-    }
-
     return 0;
 }
 
