@@ -1,0 +1,1 @@
+Universal synchronization primitives applicable for most applications
